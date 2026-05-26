@@ -540,7 +540,7 @@
 
   <!-- Drop zone -->
   <div id="drop-zone" title="Click or drag a PDF/TXT/MD file">
-    <input type="file" id="file-input" accept=".pdf,.txt,.md" />
+    <input type="file" id="file-input" accept=".pdf,.txt,.md" multiple />
     <div class="upload-icon">📄</div>
     <div class="upload-label">
       <strong>Upload a document</strong><br>
@@ -655,11 +655,10 @@ dropZone.addEventListener("dragleave", () => dropZone.classList.remove("dragover
 dropZone.addEventListener("drop", e => {
   e.preventDefault();
   dropZone.classList.remove("dragover");
-  const file = e.dataTransfer.files[0];
-  if (file) uploadFile(file);
+  for (const file of e.dataTransfer.files) uploadFile(file);
 });
 fileInput.addEventListener("change", () => {
-  if (fileInput.files[0]) uploadFile(fileInput.files[0]);
+  for (const file of fileInput.files) uploadFile(file);
 });
 
 // ── Upload ─────────────────────────────────────────────────────────────────
@@ -678,7 +677,7 @@ async function uploadFile(file) {
     docLoaded = true;
     history   = [];
 
-    docName.textContent = d.filename;
+    docName.textContent = d.filenames.join(", ");
     docStats.innerHTML  = `
       <span class="stat-pill">${d.chunks} chunks</span>
       <span class="stat-pill">${(d.chars/1000).toFixed(1)}k chars</span>
