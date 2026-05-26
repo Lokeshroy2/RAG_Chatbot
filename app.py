@@ -48,7 +48,7 @@ CHUNK_OVERLAP= 100
 TOP_K        = 5
 
 # ── in-memory store ───────────────────────────────────────────────────────────
-doc_store = {"chunks": [], "embeddings": None, "filename": ""}
+doc_store = {"chunks": [], "embeddings": None, "filenames": []}
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 def extract_text(file_bytes: bytes, filename: str) -> str:
@@ -151,13 +151,17 @@ async def upload_file(file: UploadFile = File(...)):
         raise HTTPException(400, "Could not extract text from file.")
     chunks = chunk_text(text)
     print(f"[UPLOAD] Created {len(chunks)} chunks")
-    embeddings = embed_texts(chunks)
-    print(f"[UPLOAD] Embeddings done. Shape: {embeddings.shape}")
-    doc_store.update(chunks=chunks, embeddings=embeddings, filename=file.filename)
+    new_embeddings = embed_texts(chunks)
+    existing = doc_store["embeddings"]
+    all_embeddings = np.vstack([existing, new_embeddings]) if existing is not None else new_embeddings
+    all_chunks = doc_store["chunks"] + chunks
+    doc_store.update(chunks=all_chunks, embeddings=all_embeddings)
+    doc_store["filenames"].append(file.filename)
     return {
-        "filename": file.filename,
+        "filenames": doc_store["filenames"],
+        "new_file": file.filename,
         "chars": len(text),
-        "chunks": len(chunks),
+        "chunks": len(all_chunks),
         "embed_model": "all-MiniLM-L6-v2" if HAS_EMBED else "tf-idf-fallback"
     }
 
@@ -168,7 +172,7 @@ class ChatRequest(BaseModel):
 @app.post("/chat")
 def chat(req: ChatRequest):
     if not doc_store["chunks"]:
-        raise HTTPException(400, "No document loaded. Upload a file first.")
+        raise HTTPException(400, "No documents loaded. Upload at least one file first.")
     context_chunks = retrieve(req.question)
     context = "\n\n---\n\n".join(context_chunks)
     history_str = ""
@@ -188,7 +192,7 @@ def chat(req: ChatRequest):
 
 @app.delete("/reset")
 def reset():
-    doc_store.update(chunks=[], embeddings=None, filename="")
+    doc_store.update(chunks=[], embeddings=None, filenames=[])
     return {"status": "cleared"}
 
 # ── run ───────────────────────────────────────────────────────────────────────
