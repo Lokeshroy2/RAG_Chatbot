@@ -101,32 +101,23 @@
 
   .upload-label strong { color: var(--text); }
 
-  /* doc info card */
-  #doc-card {
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 14px;
+  /* document list */
+  #doc-panel {
     display: none;
     flex-direction: column;
     gap: 8px;
+    min-height: 0;
     animation: fadeUp .3s ease;
   }
 
-  #doc-card.visible { display: flex; }
+  #doc-panel.visible { display: flex; }
 
-  .doc-header {
+  .doc-panel-header {
     display: flex;
-    align-items: flex-start;
+    align-items: center;
     justify-content: space-between;
-    gap: 8px;
-  }
-
-  .doc-name {
-    font-size: 13px;
-    font-weight: 600;
-    word-break: break-all;
-    line-height: 1.4;
+    font-size: 12px;
+    color: var(--muted);
   }
 
   .btn-reset {
@@ -134,7 +125,8 @@
     border: none;
     color: var(--danger);
     cursor: pointer;
-    font-size: 16px;
+    font-size: 11px;
+    font-family: var(--mono);
     flex-shrink: 0;
     padding: 0;
     line-height: 1;
@@ -143,11 +135,61 @@
   }
   .btn-reset:hover { opacity: 1; }
 
-  .doc-stats {
+  #doc-list {
     display: flex;
-    gap: 10px;
-    flex-wrap: wrap;
+    flex-direction: column;
+    gap: 6px;
+    overflow-y: auto;
+    max-height: 40vh;
   }
+
+  .doc-item {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 8px 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    transition: opacity .2s;
+  }
+
+  .doc-item.disabled { opacity: .45; }
+
+  .doc-item input[type=checkbox] {
+    accent-color: var(--accent);
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+
+  .doc-item-name {
+    flex: 1;
+    font-size: 12px;
+    font-weight: 600;
+    word-break: break-all;
+    line-height: 1.4;
+  }
+
+  .doc-item-chunks {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--accent);
+    flex-shrink: 0;
+  }
+
+  .doc-item .btn-del {
+    background: none;
+    border: none;
+    color: var(--danger);
+    cursor: pointer;
+    font-size: 13px;
+    flex-shrink: 0;
+    padding: 0;
+    line-height: 1;
+    opacity: .6;
+    transition: opacity .15s;
+  }
+  .doc-item .btn-del:hover { opacity: 1; }
 
   .stat-pill {
     font-family: var(--mono);
@@ -549,13 +591,13 @@
     </div>
   </div>
 
-  <!-- Doc card (shown after upload) -->
-  <div id="doc-card">
-    <div class="doc-header">
-      <div class="doc-name" id="doc-name">—</div>
-      <button class="btn-reset" id="reset-btn" title="Clear document">✕</button>
+  <!-- Document list (shown after upload) -->
+  <div id="doc-panel">
+    <div class="doc-panel-header">
+      <span id="doc-count">0 documents</span>
+      <button class="btn-reset" id="reset-btn" title="Remove all documents">clear all</button>
     </div>
-    <div class="doc-stats" id="doc-stats"></div>
+    <div id="doc-list"></div>
   </div>
 
   <!-- Status -->
@@ -606,18 +648,16 @@
 
 <!-- ── Script ──────────────────────────────────────────────────────────── -->
 <script>
-const API = "http://127.0.0.1:8001";
-
-let docLoaded = false;
-let history   = [];
-let isTyping  = false;
+let docs     = [];   // [{id, filename, enabled, chunks, chars}]
+let history  = [];
+let isTyping = false;
 
 // ── Elements ───────────────────────────────────────────────────────────────
 const fileInput     = document.getElementById("file-input");
 const dropZone      = document.getElementById("drop-zone");
-const docCard       = document.getElementById("doc-card");
-const docName       = document.getElementById("doc-name");
-const docStats      = document.getElementById("doc-stats");
+const docPanel      = document.getElementById("doc-panel");
+const docCount      = document.getElementById("doc-count");
+const docList       = document.getElementById("doc-list");
 const resetBtn      = document.getElementById("reset-btn");
 const messages      = document.getElementById("messages");
 const emptyState    = document.getElementById("empty-state");
@@ -631,23 +671,107 @@ const uploadOverlay = document.getElementById("upload-overlay");
 const overlayMsg    = document.getElementById("overlay-msg");
 const toast         = document.getElementById("toast");
 
+// ── API helper (same-origin, relative URLs) ────────────────────────────────
+async function api(path, opts = {}) {
+  const r = await fetch(path, opts);
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.detail || r.statusText || "Request failed");
+  return d;
+}
+
 // ── Health check ───────────────────────────────────────────────────────────
 async function checkHealth() {
   try {
-    const r = await fetch(`${API}/health`);
-    const d = await r.json();
-    ollamaDot.className   = "dot ok";
-    ollamaLabel.textContent = "Ollama connected";
-    modelBadge.textContent  = d.model;
+    const d = await api("/health");
+    ollamaDot.className     = "dot ok";
+    ollamaLabel.textContent = "Backend connected";
+    modelBadge.textContent  = `${d.model} · ${d.vector_backend}`;
   } catch {
-    ollamaDot.className   = "dot";
-    ollamaLabel.textContent = "Ollama offline";
-    modelBadge.textContent  = "Start: ollama serve";
+    ollamaDot.className     = "dot";
+    ollamaLabel.textContent = "Backend offline";
+    modelBadge.textContent  = "Start: python app.py";
   }
 }
 
 checkHealth();
 setInterval(checkHealth, 15000);
+
+// ── Document list ──────────────────────────────────────────────────────────
+function anyEnabled() { return docs.some(d => d.enabled); }
+
+function renderDocs() {
+  docPanel.classList.toggle("visible", docs.length > 0);
+  docCount.textContent = `${docs.length} document${docs.length === 1 ? "" : "s"}`;
+  docList.innerHTML = "";
+
+  for (const doc of docs) {
+    const item = document.createElement("div");
+    item.className = "doc-item" + (doc.enabled ? "" : " disabled");
+
+    const check = document.createElement("input");
+    check.type = "checkbox";
+    check.checked = doc.enabled;
+    check.title = doc.enabled ? "Exclude from retrieval" : "Include in retrieval";
+    check.addEventListener("change", () => toggleDoc(doc.id, check.checked));
+
+    const name = document.createElement("div");
+    name.className = "doc-item-name";
+    name.textContent = doc.filename;
+
+    const chunks = document.createElement("span");
+    chunks.className = "doc-item-chunks";
+    chunks.textContent = `${doc.chunks}c`;
+
+    const del = document.createElement("button");
+    del.className = "btn-del";
+    del.title = "Remove document";
+    del.textContent = "✕";
+    del.addEventListener("click", () => deleteDoc(doc.id, doc.filename));
+
+    item.append(check, name, chunks, del);
+    docList.appendChild(item);
+  }
+
+  const active = docs.filter(d => d.enabled).length;
+  emptyState.style.display = docs.length ? "none" : "";
+  sendBtn.disabled = isTyping || !anyEnabled();
+  headerHint.textContent = docs.length
+    ? `${active}/${docs.length} document${docs.length === 1 ? "" : "s"} in retrieval`
+    : "Upload a document to begin";
+}
+
+async function refreshDocs() {
+  try {
+    const d = await api("/documents");
+    docs = d.documents;
+  } catch { docs = []; }
+  renderDocs();
+}
+
+refreshDocs();
+
+async function toggleDoc(id, enabled) {
+  try {
+    await api(`/documents/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled })
+    });
+  } catch (err) {
+    showToast("❌ " + err.message, "error");
+  }
+  refreshDocs();
+}
+
+async function deleteDoc(id, filename) {
+  try {
+    await api(`/documents/${id}`, { method: "DELETE" });
+    showToast(`Removed ${filename}`, "success");
+  } catch (err) {
+    showToast("❌ " + err.message, "error");
+  }
+  refreshDocs();
+}
 
 // ── Drag & drop ────────────────────────────────────────────────────────────
 dropZone.addEventListener("dragover",  e => { e.preventDefault(); dropZone.classList.add("dragover"); });
@@ -655,70 +779,49 @@ dropZone.addEventListener("dragleave", () => dropZone.classList.remove("dragover
 dropZone.addEventListener("drop", e => {
   e.preventDefault();
   dropZone.classList.remove("dragover");
-  for (const file of e.dataTransfer.files) uploadFile(file);
+  uploadFiles(e.dataTransfer.files);
 });
-fileInput.addEventListener("change", () => {
-  for (const file of fileInput.files) uploadFile(file);
-});
+fileInput.addEventListener("change", () => uploadFiles(fileInput.files));
 
-// ── Upload ─────────────────────────────────────────────────────────────────
-async function uploadFile(file) {
+// ── Upload (all files in one request; chat history is preserved) ──────────
+async function uploadFiles(fileList) {
+  const files = [...fileList];
+  if (!files.length) return;
+
   uploadOverlay.classList.add("active");
-  overlayMsg.textContent = `Reading ${file.name}…`;
+  overlayMsg.textContent = files.length === 1
+    ? `Reading ${files[0].name}…`
+    : `Indexing ${files.length} files…`;
 
   const form = new FormData();
-  form.append("file", file);
+  for (const f of files) form.append("files", f);
 
   try {
-    const r = await fetch(`${API}/upload`, { method: "POST", body: form });
-    const d = await r.json();
-    if (!r.ok) throw new Error(d.detail || "Upload failed");
-
-    docLoaded = true;
-    history   = [];
-
-    docName.textContent = d.filenames.join(", ");
-    docStats.innerHTML  = `
-      <span class="stat-pill">${d.chunks} chunks</span>
-      <span class="stat-pill">${(d.chars/1000).toFixed(1)}k chars</span>
-      <span class="stat-pill">${d.embed_model}</span>
-    `;
-    docCard.classList.add("visible");
-    emptyState.style.display = "none";
-    headerHint.textContent   = `Chatting with: ${d.filename}`;
-    sendBtn.disabled         = false;
-    messages.innerHTML       = "";
-    showToast(`✅ Document loaded — ${d.chunks} chunks indexed`, "success");
+    const d = await api("/upload", { method: "POST", body: form });
+    showToast(`✅ ${d.added.length} file${d.added.length === 1 ? "" : "s"} indexed — ${d.total_chunks} chunks total`, "success");
+    for (const s of d.skipped) showToast(`⚠️ ${s.filename}: ${s.reason}`, "error");
   } catch (err) {
     showToast("❌ " + err.message, "error");
   } finally {
     uploadOverlay.classList.remove("active");
     fileInput.value = "";
+    refreshDocs();
   }
 }
 
 // ── Reset ──────────────────────────────────────────────────────────────────
 resetBtn.addEventListener("click", async () => {
-  await fetch(`${API}/reset`, { method: "DELETE" });
-  docLoaded = false;
-  history   = [];
-  docCard.classList.remove("visible");
-  docStats.innerHTML  = "";
-  sendBtn.disabled    = true;
-  headerHint.textContent = "Upload a document to begin";
-  messages.innerHTML = `
-    <div id="empty-state">
-      <div class="empty-icon">🗂️</div>
-      <div class="empty-title">No document loaded</div>
-      <div class="empty-sub">Upload a PDF, TXT, or Markdown file on the left, then ask anything about it.</div>
-    </div>`;
-  showToast("Document cleared", "success");
+  try { await api("/reset", { method: "DELETE" }); } catch {}
+  history = [];
+  messages.querySelectorAll(".msg").forEach(m => m.remove());
+  refreshDocs();
+  showToast("All documents cleared", "success");
 });
 
 // ── Send message ──────────────────────────────────────────────────────────
 async function sendMessage() {
   const q = userInput.value.trim();
-  if (!q || isTyping || !docLoaded) return;
+  if (!q || isTyping || !anyEnabled()) return;
 
   isTyping = true;
   sendBtn.disabled = true;
@@ -731,14 +834,11 @@ async function sendMessage() {
   history.push({ role: "user", content: q });
 
   try {
-    const r = await fetch(`${API}/chat`, {
+    const d = await api("/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question: q, history: history.slice(-8) })
+      body: JSON.stringify({ question: q, history: history.slice(0, -1).slice(-6) })
     });
-    const d = await r.json();
-    if (!r.ok) throw new Error(d.detail || "Chat error");
-
     typingEl.remove();
     appendMsg("bot", d.answer, d.sources);
     history.push({ role: "assistant", content: d.answer });
@@ -747,7 +847,7 @@ async function sendMessage() {
     appendMsg("bot", `⚠️ Error: ${err.message}`);
   } finally {
     isTyping = false;
-    sendBtn.disabled = !docLoaded;
+    sendBtn.disabled = !anyEnabled();
     userInput.focus();
   }
 }
@@ -776,11 +876,13 @@ function appendMsg(role, text, sources = []) {
   if (role === "bot" && sources.length) {
     const toggle = document.createElement("button");
     toggle.className = "sources-toggle";
-    toggle.innerHTML = `<span>▸</span> ${sources.length} source chunk${sources.length > 1 ? "s" : ""}`;
+    toggle.innerHTML = `<span>▸</span> ${sources.length} source${sources.length > 1 ? "s" : ""}`;
 
     const panel = document.createElement("div");
     panel.className = "sources-panel";
-    panel.textContent = sources.map((s, i) => `[${i+1}] ${s}`).join("\n\n");
+    panel.textContent = sources
+      .map((s, i) => `[${i+1}] ${s.filename} — relevance ${(s.score * 100).toFixed(0)}%\n${s.text}`)
+      .join("\n\n");
 
     toggle.addEventListener("click", () => {
       panel.classList.toggle("open");
