@@ -65,17 +65,18 @@ This project provides a completely local and beginner-friendly alternative.
 
 # Features
 
-- Upload multiple PDF, TXT, and Markdown files simultaneously
+- Upload multiple PDF, TXT, and Markdown files simultaneously (single batch request)
 - Drag & drop support for multiple files at once
-- Semantic document retrieval across all uploaded documents
-- Incremental embeddings — only new file chunks are embedded on each upload
+- FAISS vector index for fast semantic search (numpy fallback if FAISS not installed)
+- Per-document management: enable/disable individual documents in retrieval, delete individually
+- Source attribution — every answer shows which file each chunk came from, with relevance scores
+- Inline citations ([1], [2]) in LLM answers
+- Sentence-aware chunking with overlap
+- Similarity threshold filtering (irrelevant chunks are not sent to the LLM)
 - Local LLM inference using Ollama
 - Conversation history support
-- FastAPI backend
-- Simple frontend UI
-- Fully offline setup
-- No external APIs
-- Lightweight and easy to run
+- FastAPI backend, simple frontend UI
+- Fully offline setup, no external APIs
 
 ---
 
@@ -187,7 +188,8 @@ Relevant chunks are sent to Ollama + Mistral to generate the final answer.
 | Ollama | Local LLM inference |
 | Mistral | Language model |
 | Sentence Transformers | Embedding generation |
-| NumPy | Vector similarity calculations |
+| FAISS | Vector similarity search |
+| NumPy | Vector math (and FAISS fallback) |
 | PyPDF | PDF text extraction |
 | HTML/CSS/JS | Frontend UI |
 
@@ -281,8 +283,9 @@ fastapi
 uvicorn
 python-multipart
 pypdf
-sentence-transformers
 numpy
+sentence-transformers
+faiss-cpu
 ```
 
 ---
@@ -321,32 +324,63 @@ Response:
 {
   "status": "ok",
   "model": "mistral:latest",
-  "has_embed": true,
-  "has_doc": true
+  "vector_backend": "faiss",
+  "documents": 2,
+  "chunks": 87
 }
 ```
 
 ---
 
-## Upload File
+## Upload Files
 
 ```http
 POST /upload
 ```
 
-Uploads and appends a document to the shared index. Call once per file.
+Multipart form upload. Send one or more files under the `files` field in a single request.
 
 Response:
 
 ```json
 {
-  "filenames": ["doc1.pdf", "doc2.txt"],
-  "new_file": "doc2.txt",
-  "chars": 12400,
-  "chunks": 87,
+  "added": [{"id": "d0f0ccad", "filename": "doc1.pdf", "chunks": 42, "chars": 31000}],
+  "skipped": [{"filename": "notes.docx", "reason": "Unsupported type '.docx'"}],
+  "total_docs": 2,
+  "total_chunks": 87,
   "embed_model": "all-MiniLM-L6-v2"
 }
 ```
+
+---
+
+## List Documents
+
+```http
+GET /documents
+```
+
+Returns every indexed document with its id, filename, chunk count, and enabled state.
+
+---
+
+## Toggle a Document
+
+```http
+PATCH /documents/{doc_id}
+```
+
+Body: `{"enabled": false}` — excludes the document from retrieval without deleting it.
+
+---
+
+## Delete a Document
+
+```http
+DELETE /documents/{doc_id}
+```
+
+Removes a single document and rebuilds the vector index.
 
 ---
 
@@ -361,9 +395,11 @@ Request:
 ```json
 {
   "question": "What is the document about?",
-  "history": []
+  "history": [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]
 }
 ```
+
+Response includes `answer` plus `sources` — a list of `{filename, text, score}` objects.
 
 ---
 
@@ -373,7 +409,7 @@ Request:
 DELETE /reset
 ```
 
-Clears all loaded document embeddings and filenames.
+Clears all loaded documents and the vector index.
 
 ---
 
@@ -439,7 +475,6 @@ Simple and understandable implementation for learning RAG concepts.
 
 - In-memory vector storage only (resets on server restart)
 - No persistent database
-- Basic frontend UI
 - No authentication
 - No streaming responses
 
@@ -447,16 +482,12 @@ Simple and understandable implementation for learning RAG concepts.
 
 # Future Improvements
 
-- FAISS integration
-- ChromaDB support
-- Better frontend UI
+- ChromaDB / persistent vector store
 - Authentication system
 - Streaming responses
 - Docker deployment
-- LangChain integration
-- Hybrid search
+- Hybrid search (semantic + keyword)
 - Chat memory persistence
-- Per-document toggle (enable/disable individual docs from retrieval)
 
 ---
 
