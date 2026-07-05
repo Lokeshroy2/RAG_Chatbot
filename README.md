@@ -1,536 +1,164 @@
-# Local RAG Chatbot using Ollama + FastAPI
+# RAG Chatbot
 
-A fully local and 100% free Retrieval-Augmented Generation (RAG) chatbot built using FastAPI, Ollama, and Sentence Transformers.
+**A fully local, multi-document RAG (Retrieval-Augmented Generation) chatbot.**
+Upload PDF, TXT, or Markdown files and chat with them using a local LLM — no API keys, no cloud services, no cost.
 
-Upload multiple documents (PDF/TXT/Markdown) and ask questions across all of them using a local LLM — no paid API keys or cloud services required.
-
+![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-backend-009688?logo=fastapi&logoColor=white)
+![Ollama](https://img.shields.io/badge/Ollama-Mistral%207B-black)
+![FAISS](https://img.shields.io/badge/FAISS-vector%20search-0467DF)
+![Offline](https://img.shields.io/badge/100%25-local%20%26%20private-2ea44f)
 
 ---
 
-# What is RAG?
+## Overview
 
-RAG stands for **Retrieval-Augmented Generation**.
+Instead of asking an LLM to answer from memory, this application first **retrieves** the most relevant passages from your documents, then passes them to the model as grounded context:
 
-Instead of asking an LLM to answer from its own memory, RAG first retrieves relevant information from documents and then sends that context to the LLM to generate accurate answers.
-
-## Normal Chatbot
-
-```text
-Question → LLM → Answer
+```
+Question ──► Embed ──► FAISS Search ──► Top-K Chunks ──► Ollama (Mistral) ──► Cited Answer
 ```
 
-Problem:
-- Hallucinations
-- Limited knowledge
-- Cannot access your custom files
+Everything runs on your machine: embeddings via Sentence Transformers, vector search via FAISS, and generation via Ollama.
 
----
+## Features
 
-## RAG Chatbot
+- **Multi-document knowledge base** — upload many PDF / TXT / MD files; batch upload and drag & drop supported
+- **Per-document control** — include/exclude individual documents from retrieval, or delete them, without resetting the index
+- **FAISS vector search** — fast cosine-similarity retrieval with automatic NumPy fallback
+- **Source attribution** — every answer lists the file, text, and relevance score of each retrieved chunk, with inline citations (`[1]`, `[2]`)
+- **Quality retrieval** — sentence-aware chunking with overlap and a similarity threshold that keeps irrelevant context away from the LLM
+- **Conversation history** — follow-up questions work naturally
+- **Private by design** — documents never leave your machine
 
-```text
-Question → Retrieve Relevant Context → LLM → Contextual Answer
-```
+## Quick Start
 
-Benefits:
-- More accurate answers
-- Uses your own documents
-- Reduces hallucination
-- Better contextual understanding
+### Prerequisites
 
----
+- Python 3.10+
+- [Ollama](https://ollama.com) installed and running
 
-# Why This Project?
-
-Most AI chatbots depend on:
-- Paid APIs
-- Internet connection
-- Cloud infrastructure
-- Expensive vector databases
-
-This project provides a completely local and beginner-friendly alternative.
-
-## Benefits
-
-- 100% free
-- No OpenAI API key required
-- Fully offline
-- Privacy friendly
-- Simple architecture
-- Easy to understand RAG pipeline
-- Beginner-friendly implementation
-- Fast local inference using Ollama
-
----
-
-# Features
-
-- Upload multiple PDF, TXT, and Markdown files simultaneously (single batch request)
-- Drag & drop support for multiple files at once
-- FAISS vector index for fast semantic search (numpy fallback if FAISS not installed)
-- Per-document management: enable/disable individual documents in retrieval, delete individually
-- Source attribution — every answer shows which file each chunk came from, with relevance scores
-- Inline citations ([1], [2]) in LLM answers
-- Sentence-aware chunking with overlap
-- Similarity threshold filtering (irrelevant chunks are not sent to the LLM)
-- Local LLM inference using Ollama
-- Conversation history support
-- FastAPI backend, simple frontend UI
-- Fully offline setup, no external APIs
-
----
-
-# Architecture Overview
-
-```text
-                ┌──────────────────┐
-                │  Upload File(s)  │
-                └────────┬─────────┘
-                         │
-                         ▼
-                ┌──────────────────┐
-                │  Extract Text    │
-                └────────┬─────────┘
-                         │
-                         ▼
-                ┌──────────────────┐
-                │   Chunk Text     │
-                └────────┬─────────┘
-                         │
-                         ▼
-                ┌──────────────────┐
-                │ Generate Embeds  │  ← Only new chunks embedded per upload
-                └────────┬─────────┘
-                         │
-                         ▼
-                ┌──────────────────┐
-                │  Stack + Store   │  ← Appended to existing embeddings
-                └────────┬─────────┘
-                         │
-                         ▼
-                ┌──────────────────┐
-                │ Vector Retrieval │
-                └────────┬─────────┘
-                         │
-                         ▼
-                ┌──────────────────┐
-                │ Ollama + Mistral │
-                └────────┬─────────┘
-                         │
-                         ▼
-                ┌──────────────────┐
-                │  Final Response  │
-                └──────────────────┘
-```
-
----
-
-# How Retrieval Works
-
-## Step 1 — Upload Documents
-
-The user uploads one or more PDF, TXT, or Markdown files. Multiple files can be selected at once or dragged and dropped together.
-
----
-
-## Step 2 — Text Extraction
-
-The backend extracts raw text from each uploaded file.
-
----
-
-## Step 3 — Chunking
-
-Large text is split into smaller overlapping chunks to improve retrieval accuracy.
-
-```text
-Chunk 1
-Chunk 2
-Chunk 3
-```
-
----
-
-## Step 4 — Embedding Generation
-
-Each new chunk is converted into vector embeddings using:
-
-```python
-sentence-transformers/all-MiniLM-L6-v2
-```
-
-New embeddings are stacked onto existing ones using `np.vstack` — previously uploaded documents are not re-embedded.
-
----
-
-## Step 5 — Semantic Search
-
-When the user asks a question:
-
-1. The question is converted into embeddings
-2. Cosine similarity is calculated against all stored chunk embeddings
-3. The most relevant chunks are retrieved across all documents
-
----
-
-## Step 6 — LLM Response
-
-Relevant chunks are sent to Ollama + Mistral to generate the final answer.
-
----
-
-# Tech Stack
-
-| Technology | Purpose |
-|------------|----------|
-| Python | Core programming language |
-| FastAPI | Backend API framework |
-| Ollama | Local LLM inference |
-| Mistral | Language model |
-| Sentence Transformers | Embedding generation |
-| FAISS | Vector similarity search |
-| NumPy | Vector math (and FAISS fallback) |
-| PyPDF | PDF text extraction |
-| HTML/CSS/JS | Frontend UI |
-
----
-
-# Project Structure
-
-```text
-local-rag-chatbot/
-│
-├── app.py
-├── requirements.txt
-├── README.md
-│
-├── frontend/
-│   └── index.html
-│
-├── screenshots/
-│   ├── home.png
-│   ├── upload.png
-│   ├── chat.png
-│   └── demo.gif
-│
-└── sample_docs/
-    └── sample.pdf
-```
-
----
-
-# Installation
-
-## 1. Clone Repository
+### Installation
 
 ```bash
-git clone https://github.com/yourusername/local-rag-chatbot.git
-cd local-rag-chatbot
-```
+# 1. Clone the repository
+git clone https://github.com/Lokeshroy2/RAG_Chatbot.git
+cd RAG_Chatbot
 
----
-
-## 2. Install Dependencies
-
-```bash
+# 2. Install Python dependencies
 pip install -r requirements.txt
-```
 
----
-
-## 3. Install Ollama
-
-Download Ollama: https://ollama.com
-
----
-
-## 4. Pull Mistral Model
-
-```bash
+# 3. Pull the LLM and start Ollama
 ollama pull mistral
-```
-
----
-
-## 5. Start Ollama
-
-```bash
 ollama serve
 ```
 
----
-
-## 6. Run Application
+### Run
 
 ```bash
 python app.py
 ```
 
----
+The app opens automatically at **http://127.0.0.1:8001**. Upload a document and start asking questions.
 
-## 7. Open in Browser
+## Configuration
 
-```text
-http://127.0.0.1:8001
-```
+All settings live at the top of [`app.py`](app.py):
 
----
+| Setting | Default | Description |
+|---|---|---|
+| `OLLAMA_MODEL` | `mistral:latest` | Any model available in your Ollama installation |
+| `CHUNK_SIZE` | `800` | Target characters per chunk |
+| `CHUNK_OVERLAP` | `150` | Characters carried over between chunks |
+| `TOP_K` | `5` | Maximum chunks sent to the LLM per question |
+| `SCORE_THRESHOLD` | `0.25` | Minimum cosine similarity for a chunk to count as relevant |
+| `MAX_FILE_MB` | `25` | Upload size limit per file |
 
-# Requirements
+## API Reference
 
-```txt
-fastapi
-uvicorn
-python-multipart
-pypdf
-numpy
-sentence-transformers
-faiss-cpu
-```
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/health` | Server status, model name, vector backend, index size |
+| `POST` | `/upload` | Upload one or more files (multipart field `files`) |
+| `GET` | `/documents` | List indexed documents with id, chunk count, enabled state |
+| `PATCH` | `/documents/{id}` | Enable/disable a document in retrieval — body: `{"enabled": false}` |
+| `DELETE` | `/documents/{id}` | Remove a single document and rebuild the index |
+| `POST` | `/chat` | Ask a question — body: `{"question": "...", "history": [...]}` |
+| `DELETE` | `/reset` | Clear all documents |
 
----
-
-# Supported File Types
-
-- PDF
-- TXT
-- Markdown (.md)
-
----
-
-# Uploading Multiple Documents
-
-You can upload multiple documents in two ways:
-
-**Via file picker:** Click the upload zone and select multiple files at once (hold Ctrl or Cmd to multi-select).
-
-**Via drag & drop:** Drag multiple files from your file explorer and drop them onto the upload zone.
-
-Each file is processed and appended to the shared index. The sidebar shows all loaded filenames. You can reset the entire index using the ✕ button.
-
----
-
-# API Endpoints
-
-## Health Check
-
-```http
-GET /health
-```
-
-Response:
-
-```json
-{
-  "status": "ok",
-  "model": "mistral:latest",
-  "vector_backend": "faiss",
-  "documents": 2,
-  "chunks": 87
-}
-```
-
----
-
-## Upload Files
-
-```http
-POST /upload
-```
-
-Multipart form upload. Send one or more files under the `files` field in a single request.
-
-Response:
-
-```json
-{
-  "added": [{"id": "d0f0ccad", "filename": "doc1.pdf", "chunks": 42, "chars": 31000}],
-  "skipped": [{"filename": "notes.docx", "reason": "Unsupported type '.docx'"}],
-  "total_docs": 2,
-  "total_chunks": 87,
-  "embed_model": "all-MiniLM-L6-v2"
-}
-```
-
----
-
-## List Documents
-
-```http
-GET /documents
-```
-
-Returns every indexed document with its id, filename, chunk count, and enabled state.
-
----
-
-## Toggle a Document
-
-```http
-PATCH /documents/{doc_id}
-```
-
-Body: `{"enabled": false}` — excludes the document from retrieval without deleting it.
-
----
-
-## Delete a Document
-
-```http
-DELETE /documents/{doc_id}
-```
-
-Removes a single document and rebuilds the vector index.
-
----
-
-## Chat with Documents
-
-```http
-POST /chat
-```
+<details>
+<summary><strong>Example: <code>POST /chat</code></strong></summary>
 
 Request:
 
 ```json
 {
-  "question": "What is the document about?",
-  "history": [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]
+  "question": "What time does the cafeteria open?",
+  "history": [
+    {"role": "user", "content": "..."},
+    {"role": "assistant", "content": "..."}
+  ]
 }
 ```
 
-Response includes `answer` plus `sources` — a list of `{filename, text, score}` objects.
+Response:
 
----
-
-## Reset Memory
-
-```http
-DELETE /reset
+```json
+{
+  "answer": "The cafeteria opens at 8 AM [1].",
+  "sources": [
+    {"filename": "handbook.pdf", "text": "…", "score": 0.83}
+  ]
+}
 ```
 
-Clears all loaded documents and the vector index.
+</details>
 
----
+## How It Works
 
-# Example Workflow
+1. **Extract** — text is pulled from each uploaded file (`pypdf` for PDFs)
+2. **Chunk** — text is split into ~800-character, sentence-aware chunks with 150-character overlap
+3. **Embed** — chunks are encoded with `all-MiniLM-L6-v2` (normalized vectors)
+4. **Index** — vectors are stored in a FAISS inner-product index; each chunk keeps its source filename
+5. **Retrieve** — questions are embedded and matched against all *enabled* documents; chunks below the similarity threshold are discarded
+6. **Generate** — the top chunks, conversation history, and question are sent to Ollama, which answers with inline source citations
 
-## 1. Upload Documents
+## Tech Stack
 
-Select or drag multiple PDF/TXT/MD files. Each is processed and added to the shared index.
+| Technology | Role |
+|---|---|
+| [FastAPI](https://fastapi.tiangolo.com/) | Backend API |
+| [Ollama](https://ollama.com/) + Mistral 7B | Local LLM inference |
+| [Sentence Transformers](https://www.sbert.net/) | Embedding generation (`all-MiniLM-L6-v2`) |
+| [FAISS](https://github.com/facebookresearch/faiss) | Vector similarity search |
+| [pypdf](https://pypdf.readthedocs.io/) | PDF text extraction |
+| Vanilla HTML / CSS / JS | Frontend (single file, no build step) |
 
-## 2. Ask Questions
+## Project Structure
 
-```text
-Summarize the key points across all documents.
+```
+RAG_Chatbot/
+├── app.py               # FastAPI backend: vector store, retrieval, Ollama client
+├── frontend/
+│   └── index.html       # Single-file UI (chat, document manager, upload)
+├── requirements.txt
+└── README.md
 ```
 
-## 3. Retrieval
+## Limitations
 
-The system retrieves the most relevant chunks from any of the loaded documents.
+- The vector index is in-memory and resets when the server restarts
+- Responses are not streamed (the full answer arrives at once)
+- No authentication — intended for local, single-user use
 
-## 4. Final Response
+## Roadmap
 
-Ollama generates a contextual answer using retrieved information.
+- [ ] Streaming responses
+- [ ] Persistent vector store (save/load index to disk)
+- [ ] Hybrid search (semantic + keyword)
+- [ ] Docker deployment
+- [ ] Chat history persistence
 
----
+## Contributing
 
-# Application Screenshots
-
-## Home Page
-
-![Home](screenshots/home.png)
-
-## Upload Document
-
-![Upload](screenshots/upload.png)
-
-## Chat Interface
-
-![Chat](screenshots/chat.png)
-
----
-
-# Advantages of Local RAG
-
-## Privacy Friendly
-
-Your documents never leave your system.
-
-## No API Costs
-
-No OpenAI or paid cloud APIs required.
-
-## Offline Usage
-
-Works completely offline after setup.
-
-## Beginner Friendly
-
-Simple and understandable implementation for learning RAG concepts.
-
----
-
-# Current Limitations
-
-- In-memory vector storage only (resets on server restart)
-- No persistent database
-- No authentication
-- No streaming responses
-
----
-
-# Future Improvements
-
-- ChromaDB / persistent vector store
-- Authentication system
-- Streaming responses
-- Docker deployment
-- Hybrid search (semantic + keyword)
-- Chat memory persistence
-
----
-
-# Recommended Improvements
-
-## Add Environment Variables
-
-```python
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "mistral:latest")
-```
-
-## Add Logging
-
-Replace print statements with proper logging.
-
-## Add Docker Support
-
-Containerize the project for deployment.
-
----
-
-# Who Is This Project For?
-
-- Beginners learning RAG
-- Students learning LLMs
-- Developers exploring Ollama
-- AI engineers building document chatbots
-- Anyone wanting offline AI systems
-
----
-
-# Learning Outcomes
-
-By building this project, you can learn:
-
-- RAG architecture
-- Semantic search
-- Vector embeddings
-- Cosine similarity
-- FastAPI backend development
-- Ollama integration
-- Local LLM deployment
-- Document processing pipelines
-- Incremental embedding strategies
-
----
+Issues and pull requests are welcome. For significant changes, please open an issue first to discuss what you'd like to change.
