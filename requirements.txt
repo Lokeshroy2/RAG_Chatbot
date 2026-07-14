@@ -1,7 +1,7 @@
-fastapi
-uvicorn
-python-multipart
-pypdf
-numpy
-sentence-transformers
-faiss-cpu
+fastapi>=0.115,<1.0
+uvicorn>=0.30,<1.0
+python-multipart>=0.0.9,<1.0
+pypdf>=5.0,<7.0
+numpy>=1.26,<3.0
+sentence-transformers>=3.0,<6.0
+faiss-cpu>=1.8,<2.0

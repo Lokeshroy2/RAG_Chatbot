@@ -1,0 +1,67 @@
+[
+  {
+    "question": "What time does the cafeteria open?",
+    "expected_file": "employee_handbook.md",
+    "expected_keywords": ["8:00 AM"]
+  },
+  {
+    "question": "How many days of paid annual leave do employees get?",
+    "expected_file": "employee_handbook.md",
+    "expected_keywords": ["24 days"]
+  },
+  {
+    "question": "How many days per week can I work from home?",
+    "expected_file": "employee_handbook.md",
+    "expected_keywords": ["3 days"]
+  },
+  {
+    "question": "What is the deadline for submitting business expenses?",
+    "expected_file": "employee_handbook.md",
+    "expected_keywords": ["30 days"]
+  },
+  {
+    "question": "What are the core collaboration hours?",
+    "expected_file": "employee_handbook.md",
+    "expected_keywords": ["11:00 AM", "4:00 PM"]
+  },
+  {
+    "question": "How much does the Pro plan cost per month?",
+    "expected_file": "product_faq.md",
+    "expected_keywords": ["$8"]
+  },
+  {
+    "question": "What is the maximum file size that can be synced?",
+    "expected_file": "product_faq.md",
+    "expected_keywords": ["10 GB"]
+  },
+  {
+    "question": "Can deleted files be recovered on the free plan?",
+    "expected_file": "product_faq.md",
+    "expected_keywords": ["cannot be recovered"]
+  },
+  {
+    "question": "What encryption does CloudSync use?",
+    "expected_file": "product_faq.md",
+    "expected_keywords": ["AES-256"]
+  },
+  {
+    "question": "What is the minimum password length?",
+    "expected_file": "security_policy.md",
+    "expected_keywords": ["14 characters"]
+  },
+  {
+    "question": "How quickly must security incidents be reported?",
+    "expected_file": "security_policy.md",
+    "expected_keywords": ["1 hour"]
+  },
+  {
+    "question": "Is SMS allowed as a second factor for authentication?",
+    "expected_file": "security_policy.md",
+    "expected_keywords": ["prohibited"]
+  },
+  {
+    "question": "What should I do if my company laptop is stolen?",
+    "expected_file": "security_policy.md",
+    "expected_keywords": ["1 hour", "remotely wiped"]
+  }
+]
