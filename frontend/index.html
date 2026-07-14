@@ -4,8 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>RAG Chatbot</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:ital,wght@0,300;0,400;1,300&display=swap" rel="stylesheet">
+<!-- No external requests: system fonts keep the app fully local/offline -->
 <style>
   /* ── Reset & tokens ──────────────────────────────────────────────── */
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -23,8 +22,8 @@
     --bot-bg:    #141b2d;
     --danger:    #f87171;
     --radius:    14px;
-    --mono:      "DM Mono", monospace;
-    --sans:      "Syne", sans-serif;
+    --mono:      ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
+    --sans:      system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   }
 
   html, body { height: 100%; }
@@ -818,7 +817,7 @@ resetBtn.addEventListener("click", async () => {
   showToast("All documents cleared", "success");
 });
 
-// ── Send message ──────────────────────────────────────────────────────────
+// ── Send message (streamed via SSE) ────────────────────────────────────────
 async function sendMessage() {
   const q = userInput.value.trim();
   if (!q || isTyping || !anyEnabled()) return;
@@ -829,22 +828,70 @@ async function sendMessage() {
   autoResize(userInput);
 
   appendMsg("user", q);
-  const typingEl = appendTyping();
+  let typingEl = appendTyping();
 
   history.push({ role: "user", content: q });
 
+  let bubble = null, right = null, sources = [], answer = "";
+
+  const startBubble = () => {
+    if (bubble) return;
+    typingEl.remove();
+    typingEl = null;
+    ({ bubble, right } = appendMsg("bot", ""));
+  };
+
   try {
-    const d = await api("/chat", {
+    const resp = await fetch("/chat/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ question: q, history: history.slice(0, -1).slice(-6) })
     });
-    typingEl.remove();
-    appendMsg("bot", d.answer, d.sources);
-    history.push({ role: "assistant", content: d.answer });
+    if (!resp.ok) {
+      const d = await resp.json().catch(() => ({}));
+      throw new Error(d.detail || resp.statusText || "Request failed");
+    }
+
+    const reader  = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+
+      // SSE events are separated by a blank line
+      const events = buf.split("\n\n");
+      buf = events.pop();
+      for (const raw of events) {
+        const line = raw.trim();
+        if (!line.startsWith("data:")) continue;
+        const ev = JSON.parse(line.slice(5));
+        if (ev.type === "sources") {
+          sources = ev.sources || [];
+        } else if (ev.type === "delta") {
+          startBubble();
+          answer += ev.text;
+          bubble.textContent = answer;
+          messages.scrollTop = messages.scrollHeight;
+        } else if (ev.type === "error") {
+          throw new Error(ev.message);
+        }
+      }
+    }
+
+    startBubble();
+    if (sources.length) attachSources(right, sources);
+    messages.scrollTop = messages.scrollHeight;
+    history.push({ role: "assistant", content: answer });
   } catch (err) {
-    typingEl.remove();
-    appendMsg("bot", `⚠️ Error: ${err.message}`);
+    if (typingEl) typingEl.remove();
+    if (bubble && answer) {
+      bubble.textContent = answer + `\n\n⚠️ ${err.message}`;
+    } else {
+      appendMsg("bot", `⚠️ Error: ${err.message}`);
+    }
   } finally {
     isTyping = false;
     sendBtn.disabled = !anyEnabled();
@@ -873,31 +920,33 @@ function appendMsg(role, text, sources = []) {
   bubble.textContent = text;
   right.appendChild(bubble);
 
-  if (role === "bot" && sources.length) {
-    const toggle = document.createElement("button");
-    toggle.className = "sources-toggle";
-    toggle.innerHTML = `<span>▸</span> ${sources.length} source${sources.length > 1 ? "s" : ""}`;
-
-    const panel = document.createElement("div");
-    panel.className = "sources-panel";
-    panel.textContent = sources
-      .map((s, i) => `[${i+1}] ${s.filename} — relevance ${(s.score * 100).toFixed(0)}%\n${s.text}`)
-      .join("\n\n");
-
-    toggle.addEventListener("click", () => {
-      panel.classList.toggle("open");
-      toggle.querySelector("span").textContent = panel.classList.contains("open") ? "▾" : "▸";
-    });
-
-    right.appendChild(toggle);
-    right.appendChild(panel);
-  }
+  if (role === "bot" && sources.length) attachSources(right, sources);
 
   wrap.appendChild(avatar);
   wrap.appendChild(right);
   messages.appendChild(wrap);
   messages.scrollTop = messages.scrollHeight;
-  return wrap;
+  return { wrap, right, bubble };
+}
+
+function attachSources(right, sources) {
+  const toggle = document.createElement("button");
+  toggle.className = "sources-toggle";
+  toggle.innerHTML = `<span>▸</span> ${sources.length} source${sources.length > 1 ? "s" : ""}`;
+
+  const panel = document.createElement("div");
+  panel.className = "sources-panel";
+  panel.textContent = sources
+    .map((s, i) => `[${i+1}] ${s.filename} — relevance ${(s.score * 100).toFixed(0)}%\n${s.text}`)
+    .join("\n\n");
+
+  toggle.addEventListener("click", () => {
+    panel.classList.toggle("open");
+    toggle.querySelector("span").textContent = panel.classList.contains("open") ? "▾" : "▸";
+  });
+
+  right.appendChild(toggle);
+  right.appendChild(panel);
 }
 
 function appendTyping() {
