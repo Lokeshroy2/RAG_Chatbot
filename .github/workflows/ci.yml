@@ -30,7 +30,7 @@ jobs:
       # lazily/optionally and the store falls back to NumPy search, so the
       # test suite doesn't need them — but it does need every lightweight
       # dependency the auth/db/jobs modules import directly.
-      - run: pip install numpy pytest pyjwt bcrypt python-dotenv sqlalchemy redis rq
+      - run: pip install numpy pytest pyjwt bcrypt python-dotenv sqlalchemy redis rq fastapi
       # `pytest` alone (the console script) doesn't add the repo root to
       # sys.path, so `import rag_chatbot` fails; `python -m pytest` does.
       - run: python -m pytest -v
