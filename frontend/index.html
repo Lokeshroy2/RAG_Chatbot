@@ -487,6 +487,78 @@
     transform: none;
   }
 
+  /* ── Auth overlay ───────────────────────────────────────────────── */
+  #auth-overlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,.75);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 200;
+    backdrop-filter: blur(4px);
+  }
+
+  #auth-overlay.hidden { display: none; }
+
+  .auth-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 32px 36px;
+    width: 300px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .auth-card h3 { font-size: 18px; font-weight: 700; margin-bottom: 4px; }
+
+  .auth-card input {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 12px;
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 14px;
+    outline: none;
+  }
+
+  .auth-card input:focus { border-color: var(--accent); }
+
+  .auth-card button {
+    background: var(--accent);
+    color: #0d1117;
+    border: none;
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-weight: 700;
+    cursor: pointer;
+    font-size: 14px;
+  }
+
+  .auth-toggle {
+    text-align: center;
+    font-size: 13px;
+    color: var(--muted);
+    cursor: pointer;
+    text-decoration: underline;
+  }
+
+  .auth-error { color: var(--danger); font-size: 13px; min-height: 16px; }
+
+  #logout-btn {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    border-radius: 8px;
+    padding: 4px 10px;
+    font-size: 12px;
+    cursor: pointer;
+    margin-top: 8px;
+    width: 100%;
+  }
+
   /* ── Upload progress overlay ────────────────────────────────────── */
   #upload-overlay {
     position: fixed; inset: 0;
@@ -606,6 +678,7 @@
       <span id="ollama-label">Checking Ollama…</span>
     </div>
     <div class="model-badge" id="model-badge">—</div>
+    <button id="logout-btn">Log out</button>
   </div>
 </aside>
 
@@ -632,6 +705,18 @@
     <button id="send-btn" disabled title="Send">➤</button>
   </div>
 </main>
+
+<!-- ── Auth overlay ────────────────────────────────────────────────────── -->
+<div id="auth-overlay">
+  <div class="auth-card">
+    <h3 id="auth-title">Log in</h3>
+    <input id="auth-username" type="text" placeholder="Username" autocomplete="username" />
+    <input id="auth-password" type="password" placeholder="Password" autocomplete="current-password" />
+    <div class="auth-error" id="auth-error"></div>
+    <button id="auth-submit">Log in</button>
+    <div class="auth-toggle" id="auth-toggle">Need an account? Sign up</div>
+  </div>
+</div>
 
 <!-- ── Upload overlay ──────────────────────────────────────────────────── -->
 <div id="upload-overlay">
@@ -670,11 +755,99 @@ const uploadOverlay = document.getElementById("upload-overlay");
 const overlayMsg    = document.getElementById("overlay-msg");
 const toast         = document.getElementById("toast");
 
+// ── Auth ─────────────────────────────────────────────────────────────────
+const AUTH_KEY = "rag_token";
+let authMode = "login"; // "login" | "signup"
+
+// FastAPI's `detail` is a plain string for our own HTTPException calls, but a
+// list of {msg, loc, ...} objects when Pydantic itself rejects the request
+// (e.g. a too-short password) before our code ever runs. Handle both shapes.
+function errorMessage(body) {
+  const d = body && body.detail;
+  if (typeof d === "string") return d;
+  if (Array.isArray(d)) return d.map(e => e.msg || JSON.stringify(e)).join("; ");
+  return "Request failed";
+}
+
+function getToken()  { return localStorage.getItem(AUTH_KEY); }
+function setToken(t) { localStorage.setItem(AUTH_KEY, t); }
+function clearToken(){ localStorage.removeItem(AUTH_KEY); }
+
+const authOverlay  = document.getElementById("auth-overlay");
+const authTitle    = document.getElementById("auth-title");
+const authUsername = document.getElementById("auth-username");
+const authPassword = document.getElementById("auth-password");
+const authError    = document.getElementById("auth-error");
+const authSubmit   = document.getElementById("auth-submit");
+const authToggle   = document.getElementById("auth-toggle");
+const logoutBtn    = document.getElementById("logout-btn");
+
+function showAuthOverlay() { authOverlay.classList.remove("hidden"); }
+function hideAuthOverlay() {
+  authOverlay.classList.add("hidden");
+  authUsername.value = "";
+  authPassword.value = "";
+  authError.textContent = "";
+}
+
+authToggle.addEventListener("click", () => {
+  authMode = authMode === "login" ? "signup" : "login";
+  authTitle.textContent  = authMode === "login" ? "Log in" : "Sign up";
+  authSubmit.textContent = authMode === "login" ? "Log in" : "Sign up";
+  authToggle.textContent = authMode === "login"
+    ? "Need an account? Sign up" : "Already have an account? Log in";
+  authError.textContent  = "";
+});
+
+authSubmit.addEventListener("click", async () => {
+  const username = authUsername.value.trim();
+  const password = authPassword.value;
+  if (!username || !password) {
+    authError.textContent = "Enter a username and password.";
+    return;
+  }
+  try {
+    const path = authMode === "login" ? "/auth/login" : "/auth/signup";
+    const r = await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(errorMessage(d));
+    setToken(d.access_token);
+    hideAuthOverlay();
+    history = [];
+    messages.querySelectorAll(".msg").forEach(m => m.remove());
+    refreshDocs();
+  } catch (err) {
+    authError.textContent = err.message;
+  }
+});
+
+logoutBtn.addEventListener("click", () => {
+  clearToken();
+  docs = [];
+  renderDocs();
+  history = [];
+  messages.querySelectorAll(".msg").forEach(m => m.remove());
+  showAuthOverlay();
+});
+
+if (!getToken()) showAuthOverlay();
+
 // ── API helper (same-origin, relative URLs) ────────────────────────────────
 async function api(path, opts = {}) {
-  const r = await fetch(path, opts);
+  const headers = { ...(opts.headers || {}) };
+  const token = getToken();
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const r = await fetch(path, { ...opts, headers });
   const d = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(d.detail || r.statusText || "Request failed");
+  if (r.status === 401) {
+    clearToken();
+    showAuthOverlay();
+  }
+  if (!r.ok) throw new Error(errorMessage(d) || r.statusText || "Request failed");
   return d;
 }
 
@@ -783,28 +956,55 @@ dropZone.addEventListener("drop", e => {
 fileInput.addEventListener("change", () => uploadFiles(fileInput.files));
 
 // ── Upload (all files in one request; chat history is preserved) ──────────
+// Uploads are processed by a background job (see rag_chatbot/jobs.py) so a
+// large file doesn't block this request — we get a job id back immediately
+// and poll /jobs/{id} until it's finished, instead of waiting inline.
+async function pollJob(jobId, filename) {
+  for (;;) {
+    let job;
+    try {
+      job = await api(`/jobs/${jobId}`);
+    } catch (err) {
+      showToast(`❌ ${filename}: ${err.message}`, "error");
+      return;
+    }
+    if (job.status === "finished") {
+      showToast(`✅ ${filename} indexed — ${job.result.chunks} chunks`, "success");
+      refreshDocs();
+      return;
+    }
+    if (job.status === "failed") {
+      showToast(`❌ ${filename}: ${job.error || "processing failed"}`, "error");
+      return;
+    }
+    await new Promise(r => setTimeout(r, 1200));
+  }
+}
+
 async function uploadFiles(fileList) {
   const files = [...fileList];
   if (!files.length) return;
 
   uploadOverlay.classList.add("active");
   overlayMsg.textContent = files.length === 1
-    ? `Reading ${files[0].name}…`
-    : `Indexing ${files.length} files…`;
+    ? `Queuing ${files[0].name}…`
+    : `Queuing ${files.length} files…`;
 
   const form = new FormData();
   for (const f of files) form.append("files", f);
 
   try {
     const d = await api("/upload", { method: "POST", body: form });
-    showToast(`✅ ${d.added.length} file${d.added.length === 1 ? "" : "s"} indexed — ${d.total_chunks} chunks total`, "success");
     for (const s of d.skipped) showToast(`⚠️ ${s.filename}: ${s.reason}`, "error");
+    for (const q of d.queued) {
+      showToast(`Processing ${q.filename}…`, "info");
+      pollJob(q.job_id, q.filename); // runs in the background, not awaited here
+    }
   } catch (err) {
     showToast("❌ " + err.message, "error");
   } finally {
     uploadOverlay.classList.remove("active");
     fileInput.value = "";
-    refreshDocs();
   }
 }
 
@@ -844,12 +1044,19 @@ async function sendMessage() {
   try {
     const resp = await fetch("/chat/stream", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}),
+      },
       body: JSON.stringify({ question: q, history: history.slice(0, -1).slice(-6) })
     });
+    if (resp.status === 401) {
+      clearToken();
+      showAuthOverlay();
+    }
     if (!resp.ok) {
       const d = await resp.json().catch(() => ({}));
-      throw new Error(d.detail || resp.statusText || "Request failed");
+      throw new Error(errorMessage(d) || resp.statusText || "Request failed");
     }
 
     const reader  = resp.body.getReader();

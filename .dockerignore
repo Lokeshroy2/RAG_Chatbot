@@ -1,0 +1,19 @@
+# Secrets — never let these into a build context, even with explicit COPYs above.
+.env
+.env.example
+
+# Local/dev only — not needed to run the app, just bloat the build context.
+.venv/
+venv/
+__pycache__/
+*.pyc
+.git/
+.github/
+.claude/
+.pytest_cache/
+.ruff_cache/
+data/
+tests/
+eval/
+*.md
+LICENSE

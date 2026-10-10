@@ -4,6 +4,10 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+load_dotenv()  # loads a local .env file if present; real env vars still win
+
 
 def _str(name: str, default: str) -> str:
     return os.environ.get(name, default)
@@ -30,9 +34,12 @@ def _bool(name: str, default: bool) -> bool:
 class Settings:
     host: str = "127.0.0.1"
     port: int = 8001
-    ollama_url: str = "http://localhost:11434"  # base URL, no path
-    ollama_model: str = "mistral:latest"
-    ollama_timeout: int = 180  # seconds
+    llm_provider: str = "groq"  # "groq" or "gemini" — the other is the fallback
+    groq_api_key: str = ""
+    groq_model: str = "llama-3.3-70b-versatile"
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-2.0-flash"
+    llm_timeout: int = 60  # seconds
     embed_model_name: str = "all-MiniLM-L6-v2"
     chunk_size: int = 800  # target characters per chunk
     chunk_overlap: int = 150  # characters carried over between chunks
@@ -45,15 +52,22 @@ class Settings:
     persist: bool = True  # save/load the index across restarts
     data_dir: Path = Path(__file__).resolve().parent.parent / "data"
     open_browser: bool = True
+    jwt_secret: str = ""  # empty = generate an ephemeral one at startup (dev only)
+    jwt_expire_minutes: int = 1440  # access token lifetime (24h, no refresh token yet)
+    database_url: str = ""  # Postgres connection string; required, no file-based fallback
+    redis_url: str = ""  # Redis connection string for the upload job queue; required
 
     @classmethod
     def from_env(cls) -> "Settings":
         return cls(
             host=_str("RAG_HOST", cls.host),
             port=_int("RAG_PORT", cls.port),
-            ollama_url=_str("RAG_OLLAMA_URL", cls.ollama_url).rstrip("/"),
-            ollama_model=_str("RAG_OLLAMA_MODEL", cls.ollama_model),
-            ollama_timeout=_int("RAG_OLLAMA_TIMEOUT", cls.ollama_timeout),
+            llm_provider=_str("RAG_LLM_PROVIDER", cls.llm_provider),
+            groq_api_key=_str("RAG_GROQ_API_KEY", cls.groq_api_key),
+            groq_model=_str("RAG_GROQ_MODEL", cls.groq_model),
+            gemini_api_key=_str("RAG_GEMINI_API_KEY", cls.gemini_api_key),
+            gemini_model=_str("RAG_GEMINI_MODEL", cls.gemini_model),
+            llm_timeout=_int("RAG_LLM_TIMEOUT", cls.llm_timeout),
             embed_model_name=_str("RAG_EMBED_MODEL", cls.embed_model_name),
             chunk_size=_int("RAG_CHUNK_SIZE", cls.chunk_size),
             chunk_overlap=_int("RAG_CHUNK_OVERLAP", cls.chunk_overlap),
@@ -66,6 +80,10 @@ class Settings:
             persist=_bool("RAG_PERSIST", cls.persist),
             data_dir=Path(_str("RAG_DATA_DIR", str(cls.data_dir))),
             open_browser=_bool("RAG_OPEN_BROWSER", cls.open_browser),
+            jwt_secret=_str("RAG_JWT_SECRET", cls.jwt_secret),
+            jwt_expire_minutes=_int("RAG_JWT_EXPIRE_MINUTES", cls.jwt_expire_minutes),
+            database_url=_str("RAG_DATABASE_URL", cls.database_url),
+            redis_url=_str("RAG_REDIS_URL", cls.redis_url),
         )
 
 

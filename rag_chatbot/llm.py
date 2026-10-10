@@ -1,25 +1,52 @@
-"""Ollama client (blocking + streaming) and prompt construction.
+"""Hosted-LLM clients (blocking + streaming) and prompt construction.
 
-Framework-agnostic: raises OllamaError; the API layer maps it to HTTP errors.
+Groq is primary, Gemini is the fallback on rate-limit — no self-hosted
+transport anymore (Ollama needs RAM no free host provides).
+
+Framework-agnostic: raises LLMError; the API layer maps it to HTTP errors.
 History messages are plain dicts: {"role": "user"|"assistant", "content": str}.
 """
 
 import json
+import logging
 import urllib.error
 import urllib.request
 from collections.abc import Iterator
 
+from rag_chatbot import __version__
 
-class OllamaError(Exception):
+log = logging.getLogger("rag.llm")
+
+# Without an explicit User-Agent, urllib sends "Python-urllib/x.y", which
+# Cloudflare's bot protection (sitting in front of most hosted LLM APIs)
+# blocks outright with a 403 before the request ever reaches the provider.
+USER_AGENT = f"rag-chatbot/{__version__}"
+
+
+class LLMError(Exception):
     def __init__(self, status: int, message: str):
         super().__init__(message)
         self.status = status
         self.message = message
 
 
-class OllamaClient:
-    def __init__(self, base_url: str, model: str, timeout: int = 180):
-        self.base_url = base_url.rstrip("/")
+class LLMClient:
+    """Common interface implemented by GroqClient, GeminiClient, and FallbackLLMClient."""
+
+    def generate(self, prompt: str, temperature: float = 0.2) -> str:
+        raise NotImplementedError
+
+    def generate_stream(self, prompt: str, temperature: float = 0.2) -> Iterator[str]:
+        raise NotImplementedError
+
+
+class GroqClient(LLMClient):
+    """OpenAI-compatible chat-completions API."""
+
+    URL = "https://api.groq.com/openai/v1/chat/completions"
+
+    def __init__(self, api_key: str, model: str, timeout: int = 60):
+        self.api_key = api_key
         self.model = model
         self.timeout = timeout
 
@@ -27,55 +54,144 @@ class OllamaClient:
         payload = json.dumps(
             {
                 "model": self.model,
-                "prompt": prompt,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": temperature,
                 "stream": stream,
-                "options": {"temperature": temperature},
             }
         ).encode()
         req = urllib.request.Request(
-            f"{self.base_url}/api/generate",
+            self.URL,
             data=payload,
-            headers={"Content-Type": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.api_key}",
+                "User-Agent": USER_AGENT,
+            },
             method="POST",
         )
         try:
             return urllib.request.urlopen(req, timeout=self.timeout)
         except urllib.error.HTTPError as e:
             body = e.read().decode("utf-8", errors="replace")[:300]
-            raise OllamaError(502, f"Ollama error ({e.code}): {body}") from e
+            status = 429 if e.code == 429 else 502
+            raise LLMError(status, f"Groq error ({e.code}): {body}") from e
         except urllib.error.URLError as e:
-            raise OllamaError(503, f"Ollama not reachable. Is it running? Error: {e}") from e
+            raise LLMError(503, f"Groq not reachable: {e}") from e
 
     def generate(self, prompt: str, temperature: float = 0.2) -> str:
         with self._request(prompt, stream=False, temperature=temperature) as resp:
             data = json.loads(resp.read())
-        if "error" in data:
-            raise OllamaError(502, f"Ollama error: {data['error']}")
-        return data.get("response", "").strip()
+        return data["choices"][0]["message"]["content"].strip()
 
     def generate_stream(self, prompt: str, temperature: float = 0.2) -> Iterator[str]:
-        """Yield response text fragments as Ollama produces them."""
+        """Groq streams OpenAI-style SSE lines: `data: {...}`, ending `data: [DONE]`."""
         with self._request(prompt, stream=True, temperature=temperature) as resp:
-            for line in resp:
-                line = line.strip()
-                if not line:
+            for raw_line in resp:
+                line = raw_line.decode("utf-8", errors="replace").strip()
+                if not line.startswith("data:"):
                     continue
-                data = json.loads(line)
-                if "error" in data:
-                    raise OllamaError(502, f"Ollama error: {data['error']}")
-                if data.get("response"):
-                    yield data["response"]
-                if data.get("done"):
+                payload = line[len("data:") :].strip()
+                if payload == "[DONE]":
                     break
+                chunk = json.loads(payload)
+                delta = chunk["choices"][0].get("delta", {}).get("content")
+                if delta:
+                    yield delta
 
-    def list_models(self) -> list[str]:
-        req = urllib.request.Request(f"{self.base_url}/api/tags")
+
+class GeminiClient(LLMClient):
+    """Google's Generative Language REST API (v1beta)."""
+
+    BASE = "https://generativelanguage.googleapis.com/v1beta/models"
+
+    def __init__(self, api_key: str, model: str, timeout: int = 60):
+        self.api_key = api_key
+        self.model = model
+        self.timeout = timeout
+
+    def _url(self, method: str) -> str:
+        return f"{self.BASE}/{self.model}:{method}?key={self.api_key}"
+
+    def _body(self, prompt: str, temperature: float) -> bytes:
+        return json.dumps(
+            {
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {"temperature": temperature},
+            }
+        ).encode()
+
+    def _post(self, url: str, body: bytes):
+        req = urllib.request.Request(
+            url,
+            data=body,
+            headers={"Content-Type": "application/json", "User-Agent": USER_AGENT},
+            method="POST",
+        )
         try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                data = json.loads(resp.read())
-        except (urllib.error.URLError, OSError) as e:
-            raise OllamaError(503, f"Ollama not reachable: {e}") from e
-        return [m.get("name", "") for m in data.get("models", [])]
+            return urllib.request.urlopen(req, timeout=self.timeout)
+        except urllib.error.HTTPError as e:
+            body_text = e.read().decode("utf-8", errors="replace")[:300]
+            status = 429 if e.code == 429 else 502
+            raise LLMError(status, f"Gemini error ({e.code}): {body_text}") from e
+        except urllib.error.URLError as e:
+            raise LLMError(503, f"Gemini not reachable: {e}") from e
+
+    def generate(self, prompt: str, temperature: float = 0.2) -> str:
+        with self._post(self._url("generateContent"), self._body(prompt, temperature)) as resp:
+            data = json.loads(resp.read())
+        try:
+            return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+        except (KeyError, IndexError) as e:
+            raise LLMError(502, f"Unexpected Gemini response shape: {data}") from e
+
+    def generate_stream(self, prompt: str, temperature: float = 0.2) -> Iterator[str]:
+        """Gemini's SSE stream (`alt=sse`) wraps each chunk in `data: {...}`."""
+        url = self._url("streamGenerateContent") + "&alt=sse"
+        with self._post(url, self._body(prompt, temperature)) as resp:
+            for raw_line in resp:
+                line = raw_line.decode("utf-8", errors="replace").strip()
+                if not line.startswith("data:"):
+                    continue
+                payload = line[len("data:") :].strip()
+                if not payload:
+                    continue
+                chunk = json.loads(payload)
+                try:
+                    text = chunk["candidates"][0]["content"]["parts"][0]["text"]
+                except (KeyError, IndexError):
+                    continue
+                if text:
+                    yield text
+
+
+class FallbackLLMClient(LLMClient):
+    """Tries the primary client; retries once against the fallback on a 429.
+
+    Safe for streaming specifically because a rate-limit is returned by the
+    provider before any response body streams — the primary never yields a
+    partial answer before failing, so switching clients can't duplicate text.
+    A failure for any other reason propagates instead of silently falling back.
+    """
+
+    def __init__(self, primary: LLMClient, fallback: LLMClient):
+        self.primary = primary
+        self.fallback = fallback
+
+    def generate(self, prompt: str, temperature: float = 0.2) -> str:
+        try:
+            return self.primary.generate(prompt, temperature)
+        except LLMError as e:
+            if e.status != 429:
+                raise
+            return self.fallback.generate(prompt, temperature)
+
+    def generate_stream(self, prompt: str, temperature: float = 0.2) -> Iterator[str]:
+        try:
+            yield from self.primary.generate_stream(prompt, temperature)
+        except LLMError as e:
+            if e.status != 429:
+                raise
+            yield from self.fallback.generate_stream(prompt, temperature)
 
 
 # ── prompt construction (pure functions) ──────────────────────────────────────
@@ -139,7 +255,7 @@ def build_condense_prompt(question: str, history: list[dict]) -> str:
     )
 
 
-def condense_question(client: OllamaClient, question: str, history: list[dict]) -> str:
+def condense_question(client: LLMClient, question: str, history: list[dict]) -> str:
     """Rewrite a follow-up into a standalone question for retrieval.
 
     Falls back to the original question if the LLM is unavailable or returns
@@ -149,7 +265,11 @@ def condense_question(client: OllamaClient, question: str, history: list[dict]) 
         return question
     try:
         rewritten = client.generate(build_condense_prompt(question, history), temperature=0.0)
-    except OllamaError:
+    except LLMError as e:
+        log.warning(
+            "Query condensing failed (%s) — retrieving on the raw question instead: %r",
+            e.message, question,
+        )
         return question
     rewritten = rewritten.strip().strip('"').strip()
     if not rewritten or len(rewritten) > max(4 * len(question), 300):

@@ -124,3 +124,46 @@ def test_persisted_dim_mismatch_is_ignored(tmp_path):
     add_doc(store, "a.txt", axis=0)
     other = VectorStore(DIM + 1, persist_dir=tmp_path)
     assert other.list_documents() == []
+
+
+# ── multi-tenancy ────────────────────────────────────────────────────────────
+
+
+def test_list_documents_is_scoped_to_owner():
+    store = make_store()
+    alice_doc = store.add_document("alice.txt", ["hi"], np.stack([basis(0)]), owner_id="alice")
+    bob_doc = store.add_document("bob.txt", ["hi"], np.stack([basis(0)]), owner_id="bob")
+
+    assert [d["id"] for d in store.list_documents(owner_id="alice")] == [alice_doc]
+    assert [d["id"] for d in store.list_documents(owner_id="bob")] == [bob_doc]
+
+
+def test_search_never_returns_another_owners_chunks():
+    store = make_store()
+    store.add_document("alice.txt", ["alice chunk"] * 3, np.stack([basis(0)] * 3), owner_id="alice")
+    store.add_document("bob.txt", ["bob chunk"] * 3, np.stack([basis(0)] * 3), owner_id="bob")
+
+    # same query vector, same axis, same FAISS index underneath both owners
+    alice_hits = store.search(basis(0), owner_id="alice", top_k=10, score_threshold=0.0)
+    bob_hits = store.search(basis(0), owner_id="bob", top_k=10, score_threshold=0.0)
+
+    assert alice_hits and all(h["filename"] == "alice.txt" for h in alice_hits)
+    assert bob_hits and all(h["filename"] == "bob.txt" for h in bob_hits)
+
+    # a third owner who never uploaded anything sees nothing, not an error
+    assert store.search(basis(0), owner_id="carol", top_k=10, score_threshold=0.0) == []
+
+
+def test_owner_cannot_disable_or_delete_another_owners_document():
+    store = make_store()
+    alice_doc = store.add_document("alice.txt", ["hi"], np.stack([basis(0)]), owner_id="alice")
+
+    with pytest.raises(KeyError):
+        store.set_enabled(alice_doc, False, owner_id="bob")
+    with pytest.raises(KeyError):
+        store.remove_document(alice_doc, owner_id="bob")
+
+    # untouched by bob's failed attempts, and alice can still manage her own doc
+    assert store.list_documents(owner_id="alice")[0]["enabled"] is True
+    store.set_enabled(alice_doc, False, owner_id="alice")
+    assert store.list_documents(owner_id="alice")[0]["enabled"] is False

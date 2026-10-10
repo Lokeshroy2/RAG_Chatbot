@@ -1,7 +1,17 @@
+import io
+import json
+import urllib.error
+from unittest.mock import patch
+
+import pytest
+
 from rag_chatbot.llm import (
     NO_ANSWER_SENTENCE,
-    OllamaClient,
-    OllamaError,
+    FallbackLLMClient,
+    GeminiClient,
+    GroqClient,
+    LLMClient,
+    LLMError,
     build_condense_prompt,
     build_prompt,
     condense_question,
@@ -53,9 +63,8 @@ def test_condense_prompt_contains_history_and_question():
     assert "how fast is it?" in prompt
 
 
-class FakeClient(OllamaClient):
+class FakeClient(LLMClient):
     def __init__(self, reply=None, error=None):
-        super().__init__("http://localhost:11434", "fake")
         self.reply = reply
         self.error = error
 
@@ -78,11 +87,102 @@ def test_condense_question_skips_when_no_history():
     assert condense_question(client, "What is FAISS?", []) == "What is FAISS?"
 
 
-def test_condense_question_falls_back_on_ollama_error():
-    client = FakeClient(error=OllamaError(503, "down"))
+def test_condense_question_falls_back_on_llm_error():
+    client = FakeClient(error=LLMError(503, "down"))
     assert condense_question(client, "how fast is it?", HISTORY) == "how fast is it?"
 
 
 def test_condense_question_rejects_implausible_rewrites():
     assert condense_question(FakeClient(reply=""), "how fast?", HISTORY) == "how fast?"
     assert condense_question(FakeClient(reply="word " * 500), "how fast?", HISTORY) == "how fast?"
+
+
+# ── FallbackLLMClient ────────────────────────────────────────────────────────
+
+
+def test_fallback_uses_primary_when_healthy():
+    client = FallbackLLMClient(FakeClient(reply="from primary"), FakeClient(reply="from fallback"))
+    assert client.generate("hi") == "from primary"
+
+
+def test_fallback_switches_to_secondary_on_429():
+    client = FallbackLLMClient(
+        FakeClient(error=LLMError(429, "rate limited")), FakeClient(reply="from fallback")
+    )
+    assert client.generate("hi") == "from fallback"
+
+
+def test_fallback_propagates_non_429_errors():
+    client = FallbackLLMClient(
+        FakeClient(error=LLMError(503, "down")), FakeClient(reply="from fallback")
+    )
+    with pytest.raises(LLMError) as exc_info:
+        client.generate("hi")
+    assert exc_info.value.status == 503
+
+
+# ── GroqClient / GeminiClient wire format ───────────────────────────────────
+# Mocked at the urllib layer — these catch JSON-shape bugs before a live call does.
+
+
+class _FakeResponse:
+    def __init__(self, body: bytes = b"", lines: list[bytes] | None = None):
+        self._body = body
+        self._lines = lines or []
+
+    def read(self):
+        return self._body
+
+    def __iter__(self):
+        return iter(self._lines)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def test_groq_generate_parses_openai_shaped_response():
+    body = json.dumps({"choices": [{"message": {"content": "  Paris.  "}}]}).encode()
+    with patch("urllib.request.urlopen", return_value=_FakeResponse(body)):
+        assert GroqClient("key", "model").generate("capital of France?") == "Paris."
+
+
+def test_groq_generate_stream_parses_sse_lines():
+    lines = [
+        b'data: {"choices":[{"delta":{"content":"Hel"}}]}\n',
+        b'data: {"choices":[{"delta":{"content":"lo"}}]}\n',
+        b"data: [DONE]\n",
+    ]
+    with patch("urllib.request.urlopen", return_value=_FakeResponse(lines=lines)):
+        assert "".join(GroqClient("key", "model").generate_stream("hi")) == "Hello"
+
+
+def test_groq_maps_429_to_rate_limit_status():
+    err = urllib.error.HTTPError("url", 429, "Too Many Requests", {}, io.BytesIO(b"slow down"))
+    with patch("urllib.request.urlopen", side_effect=err), pytest.raises(LLMError) as exc_info:
+        GroqClient("key", "model").generate("hi")
+    assert exc_info.value.status == 429
+
+
+def test_gemini_generate_parses_candidate_shaped_response():
+    body = json.dumps({"candidates": [{"content": {"parts": [{"text": "Paris."}]}}]}).encode()
+    with patch("urllib.request.urlopen", return_value=_FakeResponse(body)):
+        assert GeminiClient("key", "model").generate("capital of France?") == "Paris."
+
+
+def test_gemini_generate_stream_parses_sse_lines():
+    lines = [
+        b'data: {"candidates":[{"content":{"parts":[{"text":"Hel"}]}}]}\n',
+        b'data: {"candidates":[{"content":{"parts":[{"text":"lo"}]}}]}\n',
+    ]
+    with patch("urllib.request.urlopen", return_value=_FakeResponse(lines=lines)):
+        assert "".join(GeminiClient("key", "model").generate_stream("hi")) == "Hello"
+
+
+def test_gemini_maps_429_to_rate_limit_status():
+    err = urllib.error.HTTPError("url", 429, "Too Many Requests", {}, io.BytesIO(b"slow down"))
+    with patch("urllib.request.urlopen", side_effect=err), pytest.raises(LLMError) as exc_info:
+        GeminiClient("key", "model").generate("hi")
+    assert exc_info.value.status == 429
