@@ -202,9 +202,9 @@ RAG_Chatbot/
 
 ## Limitations
 
-- Answer quality depends on the local model (Mistral 7B by default) — small models occasionally miss citations
+- Answer quality depends on the configured model — smaller models occasionally miss citations
 - Query condensation adds one extra LLM round-trip per follow-up question (disable with `RAG_CONDENSE_QUERIES=0`)
-- No authentication — intended for local, single-user use
+- No PII awareness — if a document contains personal data (phone numbers, etc.), the chatbot will recite it verbatim on request with no redaction or sensitive-data handling. Fine for single-user use on your own documents; a real multi-tenant deployment handling other people's documents would need a PII-detection/redaction layer before this is safe to expose.
 
 ## Roadmap
 
