@@ -61,7 +61,10 @@ class Settings:
     def from_env(cls) -> "Settings":
         return cls(
             host=_str("RAG_HOST", cls.host),
-            port=_int("RAG_PORT", cls.port),
+            # Most free hosts (Render included) inject their own PORT and expect
+            # the app to bind to it. RAG_PORT wins if you set it explicitly;
+            # otherwise fall back to the platform's PORT before our own default.
+            port=_int("RAG_PORT", _int("PORT", cls.port)),
             llm_provider=_str("RAG_LLM_PROVIDER", cls.llm_provider),
             groq_api_key=_str("RAG_GROQ_API_KEY", cls.groq_api_key),
             groq_model=_str("RAG_GROQ_MODEL", cls.groq_model),
