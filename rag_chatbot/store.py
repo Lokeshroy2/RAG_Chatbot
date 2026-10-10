@@ -33,7 +33,7 @@ class VectorStore:
         self.dim = dim
         self.lock = threading.Lock()
         self.persist_dir = Path(persist_dir) if persist_dir else None
-        self.docs: dict = {}  # doc_id -> {"filename", "enabled", "chunks", "chars"}
+        self.docs: dict = {}  # doc_id -> {"filename", "owner_id", "enabled", "chunks", "chars"}
         self.meta: list[dict] = []  # per chunk: {"doc_id", "filename", "text"}
         self.embeddings = np.zeros((0, dim), dtype=np.float32)
         self.index = faiss.IndexFlatIP(dim) if HAS_FAISS else None
@@ -42,11 +42,14 @@ class VectorStore:
 
     # ── mutations ────────────────────────────────────────────────────────────
 
-    def add_document(self, filename: str, chunks: list[str], vecs: np.ndarray) -> str:
+    def add_document(
+        self, filename: str, chunks: list[str], vecs: np.ndarray, owner_id: str = "anonymous"
+    ) -> str:
         with self.lock:
             doc_id = uuid.uuid4().hex[:8]
             self.docs[doc_id] = {
                 "filename": filename,
+                "owner_id": owner_id,
                 "enabled": True,
                 "chunks": len(chunks),
                 "chars": sum(len(c) for c in chunks),
@@ -60,9 +63,9 @@ class VectorStore:
             self._save()
             return doc_id
 
-    def remove_document(self, doc_id: str):
+    def remove_document(self, doc_id: str, owner_id: str = "anonymous"):
         with self.lock:
-            if doc_id not in self.docs:
+            if doc_id not in self.docs or self.docs[doc_id]["owner_id"] != owner_id:
                 raise KeyError(doc_id)
             keep = [i for i, m in enumerate(self.meta) if m["doc_id"] != doc_id]
             self.meta = [self.meta[i] for i in keep]
@@ -73,34 +76,57 @@ class VectorStore:
             self._rebuild_index()
             self._save()
 
-    def set_enabled(self, doc_id: str, enabled: bool):
+    def set_enabled(self, doc_id: str, enabled: bool, owner_id: str = "anonymous"):
         with self.lock:
-            if doc_id not in self.docs:
+            if doc_id not in self.docs or self.docs[doc_id]["owner_id"] != owner_id:
                 raise KeyError(doc_id)
             self.docs[doc_id]["enabled"] = enabled
             self._save()
 
-    def clear(self):
+    def clear(self, owner_id: str | None = None):
+        """Wipe everything if owner_id is None, otherwise only that owner's documents."""
         with self.lock:
-            self.docs.clear()
-            self.meta.clear()
-            self.embeddings = np.zeros((0, self.dim), np.float32)
+            if owner_id is None:
+                self.docs.clear()
+                self.meta.clear()
+                self.embeddings = np.zeros((0, self.dim), np.float32)
+            else:
+                keep_ids = {k for k, v in self.docs.items() if v["owner_id"] != owner_id}
+                self.docs = {k: v for k, v in self.docs.items() if k in keep_ids}
+                keep_rows = [i for i, m in enumerate(self.meta) if m["doc_id"] in keep_ids]
+                self.meta = [self.meta[i] for i in keep_rows]
+                self.embeddings = (
+                    self.embeddings[keep_rows] if keep_rows else np.zeros((0, self.dim), np.float32)
+                )
             self._rebuild_index()
             self._save()
 
     # ── queries ──────────────────────────────────────────────────────────────
 
-    def list_documents(self) -> list[dict]:
+    def list_documents(self, owner_id: str | None = "anonymous") -> list[dict]:
+        """All documents if owner_id is None (admin/health view), else just that owner's."""
         with self.lock:
-            return [{"id": k, **v} for k, v in self.docs.items()]
+            if owner_id is None:
+                return [{"id": k, **v} for k, v in self.docs.items()]
+            return [
+                {"id": k, **v} for k, v in self.docs.items() if v["owner_id"] == owner_id
+            ]
 
     def search(
-        self, q_vec: np.ndarray, top_k: int = 5, score_threshold: float = 0.25
+        self,
+        q_vec: np.ndarray,
+        *,
+        owner_id: str = "anonymous",
+        top_k: int = 5,
+        score_threshold: float = 0.25,
     ) -> list[dict]:
-        """Top chunks from enabled documents scoring above the threshold."""
+        """Top chunks from this owner's enabled documents scoring above the threshold."""
         with self.lock:
             enabled_rows = [
-                i for i, m in enumerate(self.meta) if self.docs[m["doc_id"]]["enabled"]
+                i
+                for i, m in enumerate(self.meta)
+                if self.docs[m["doc_id"]]["enabled"]
+                and self.docs[m["doc_id"]]["owner_id"] == owner_id
             ]
             if not enabled_rows:
                 return []
@@ -178,6 +204,8 @@ class VectorStore:
                 log.warning("Persisted store is inconsistent — ignoring it.")
                 return
             self.docs = state["docs"]
+            for doc in self.docs.values():
+                doc.setdefault("owner_id", "anonymous")
             self.meta = state["meta"]
             self.embeddings = embeddings.astype(np.float32)
             self._rebuild_index()
