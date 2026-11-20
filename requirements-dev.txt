@@ -1,3 +1,8 @@
 -r requirements.txt
 pytest>=8.0
 ruff>=0.6
+
+# eval/run_ragas_eval.py only (answer-quality eval, not needed to run the app)
+ragas>=0.4
+openai>=1.0
+truststore>=0.9
