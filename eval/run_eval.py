@@ -53,7 +53,9 @@ def main() -> int:
 
     for case in golden:
         q_vec = embeddings.embed_texts([case["question"]])[0]
-        results = store.search(q_vec, settings.top_k, settings.score_threshold)
+        results = store.search(
+            q_vec, top_k=settings.top_k, score_threshold=settings.score_threshold
+        )
 
         rank = next(
             (i + 1 for i, r in enumerate(results) if r["filename"] == case["expected_file"]),
